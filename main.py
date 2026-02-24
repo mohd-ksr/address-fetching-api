@@ -1,41 +1,39 @@
+
 import os
-import google.generativeai as genai
+from groq import Groq
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
 
 if not api_key:
-    raise ValueError("❌ GEMINI_API_KEY not found. Please set it in the .env file.")
+    raise ValueError("❌ GROQ_API_KEY not found. Please set it in the .env file.")
 
-# Configure the Gemini API with the key
-genai.configure(api_key=api_key)
+# Configure Groq client
+client = Groq(api_key=api_key)
+MODEL_NAME = "llama-3.1-8b-instant"
 
-# Use the powerful 'gemini-1.5-pro-latest' model as requested
-MODEL_NAME = "gemini-2.0-flash"
-model = genai.GenerativeModel(MODEL_NAME)
-
-# Initialize FastAPI app with a specific title and description
+# Initialize FastAPI app
 app = FastAPI(
     title="Reverse Geocoding API",
-    description="An API to get a human-readable address from geographic coordinates using Gemini.",
+    description="An API to get a human-readable address from geographic coordinates using Groq LLM.",
     version="1.0.0"
 )
 
-# Enable CORS to allow frontend applications to call the API
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict this to your actual frontend domain in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Pydantic Models for Request/Response ---
+# --- Pydantic Models ---
 
 class CoordinatesRequest(BaseModel):
     latitude: float = Field(..., example=12.9716, description="The latitude of the location.")
@@ -46,35 +44,53 @@ class AddressResponse(BaseModel):
     address: str | None = None
     error: str | None = None
 
-# --- API Routes (Endpoints) ---
+# --- Routes ---
 
 @app.get("/")
 def home():
-    """Root endpoint providing a welcome message."""
-    return {"message": f"🌍 Reverse Geocoding API is running with {MODEL_NAME}!"}
+    return {"message": f"🌍 Reverse Geocoding API is running with {MODEL_NAME} via Groq!"}
 
 
 @app.post("/get-address", response_model=AddressResponse)
 def get_address_from_coordinates(req: CoordinatesRequest):
-    """Gets a human-readable address from geographic coordinates."""
     prompt = f"""
-    You are an expert reverse geocoding service.
-    Your only task is to provide a clean, single-line, human-readable address 
-    for the given geographical coordinates. Do not add any extra explanation or formatting.
-    Just return the plain text address.
+You are an expert reverse geocoding service.
 
-    Latitude: {req.latitude}
-    Longitude: {req.longitude}
-    """
+Your ONLY task:
+Provide a clean, single-line, human-readable address 
+for the given geographical coordinates.
+
+Rules:
+- Return only the address.
+- No explanation.
+- No formatting.
+- Single line only.
+
+Latitude: {req.latitude}
+Longitude: {req.longitude}
+"""
+
     try:
-        response = model.generate_content(prompt)
-        address = response.text.strip()
-        # On success, return a JSON object that matches the AddressResponse model
-        return {"success": True, "address": address, "error": None}
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "You return only clean address text."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0
+        )
+
+        address = response.choices[0].message.content.strip()
+
+        return {
+            "success": True,
+            "address": address,
+            "error": None
+        }
+
     except Exception as e:
-        print(f"❌ Error from Gemini API during geocoding: {e}")
-        # If there is an error, raise an HTTPException which FastAPI handles correctly
+        print(f"❌ Error from Groq API during geocoding: {e}")
         raise HTTPException(
-            status_code=500, 
-            detail=f"An error occurred with the Gemini API: {str(e)}"
+            status_code=500,
+            detail=f"An error occurred with the Groq API: {str(e)}"
         )
